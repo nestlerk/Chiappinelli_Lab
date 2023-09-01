@@ -7,8 +7,9 @@
 # -out: Path to the output table
 # Please note:
 # The script will also add "ls_" to the beginning of all the Telescope transcript names to indicate they are locus specific. 
-# This will help after DESeq2 analysis to distinguish the locus-specific transcripts but be sure to remove the "ls_" before visualizing the data.
-# The script also assumes the TEcount table headers have the sample name directly before the capital "A" from "Aligned.out.bam" in the header. 
+# This will help after DESeq2 analysis to distinguish the locus-specific transcripts, but be sure to remove the "ls_" before visualizing the data.
+# The script also assumes the TEcount table headers have the sample name directly before the capital "A" from "Aligned.out.bam" in the header.
+# You will need to remove the "transcript" column from the output table before running DESeq2.
 
 ################### Usage ###################
 # Load our required packages
@@ -18,8 +19,8 @@ import os
 import glob
 # Parse arguments
 parser = argparse.ArgumentParser(description='Combine TEcount and Telescope tables')
-parser.add_argument('-telescope', help='List of telescope tables to combine', required=True)
-parser.add_argument('-tecount', help='List of tecount tables to combine', required=True)
+parser.add_argument('-telescope', help='Path to Telescope tsv file', required=True)
+parser.add_argument('-tecount', help='Path to folder containing TEcount tables', required=True)
 parser.add_argument('-out', help='Output table', required=True)
 args = parser.parse_args()
 
@@ -49,7 +50,7 @@ telescope = telescope.astype(int)
 telescope.reset_index(inplace=True)
 # Modify the column names to include the sample name before the hyphen
 telescope.columns = telescope.columns.str.split("-").str[0]
-# Add "ls_" to the beginning of all the transcript names to indicate they are locus specific. This will help after DESeq2 analysis to distinguish between the locus specific and subfamily specific transcripts.
+# Add "ls_" to the beginning of all the transcript names to indicate they are locus specific.
 telescope['transcript'] = telescope['transcript'].apply(lambda x: 'ls_' + x)
 
 ################### Merge the two tables ###################
