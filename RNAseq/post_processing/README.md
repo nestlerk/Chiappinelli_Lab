@@ -20,4 +20,4 @@ Updated: 9/15/2023
 * The path for each Telescope report file should end in "-telescope_report.tsv".
 * The path for each TEtranscripts count table should end in "-tetranscripts.cntTable".
 * Please make sure the sample names match before the hyphen in the file name! This is what the script will use to match the samples.
-* To run the script: python make.telescope.tetranscripts.DESeq2.input.filter.baseMean.10.py <control samples> <treat samples> <annotation> <output directory> -o <output name> -na <NA value> -mode <combined/telescope/tetranscripts>
+* To run the script: python make.telescope.tetranscripts.DESeq2.input.filter.baseMean.10.py [control samples directory] "treat samples" "annotation" "output directory" -o "output name" -na "NA value" -mode "combined/telescope/tetranscripts"
