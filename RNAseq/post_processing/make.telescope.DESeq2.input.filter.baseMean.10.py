@@ -1,21 +1,29 @@
 #!/usr/bin/python
-
+# Last updated: 2023.09.15 by Kevin Nestler
 import sys  # Allows you to use system variabls such as ARGV
 import os   # Allows us to use paths in our code for file locations
 import argparse # This can let you take user input to fine tune variables
 import re   # This lets you use regular expressions
 import pandas # This lets you join tables together without dictionaries
 import textwrap # This lets me clear indentation from the script output I make
-
-# This script will take in 2 files/lists that specify sample file uniqe IDs:
+# This script will take in 2 files/lists that specify sample file unique IDs:
 # 1. Control Samples
 # 2. Treatment/Experimental Samples
-# 3. Annotation file Path -- Assumes GTF!!!
+# 3. Annotation file Path -- Assumes GTF!!! This is the annotation file for the Telescope reports only.
 # 4. Output directory
-# Optional input will be a tag for output file names and a flag for handling NA values.
+# 5. Optional input will be a tag for output file names and a flag for handling NA values.
+# 6. Optional input will be a flag for mode: combined, telescope, or tetranscripts. Default is combined.
 
-# The input files should provide the absolute file path for each Telescope report file.
-# I.e. the path for each file, which should end in "-telescope_report.tsv".
+# The input files should provide the absolute file path for each Telescope report file and TEtranscripts count table.
+# The path for each Telescope report file should end in "-telescope_report.tsv".
+# The path for each TEtranscripts count table should end in "-tetranscripts.cntTable".
+# Please make sure the sample names match before the hyphen in the file name! 
+# This is what the script will use to match the samples.
+
+# The mode flag gives you the option to generate a single count table and DESeq2 script for:
+# 1. Combined data -- This will combine the Telescope and TEtranscripts data into a single count table and DESeq2 script.
+# 2. Telescope data only -- This will only use the Telescope data to generate a count table and DESeq2 script.
+# 3. TEtranscripts data only -- This will only use the TEtranscripts data to generate a count table and DESeq2 script.
 
 # Example Telescope report format for an individual file:
 # [jimcdonald@mgpc telescope.troubleshoot]$ head TCGA-04-1331-01A.bt2.tele.troubleshoot-telescope_report.tsv
@@ -27,22 +35,36 @@ import textwrap # This lets me clear indentation from the script output I make
 # L1FLnI_8q21.11w 10016   9488    9288.00 0.000318        23823   9123    11021   11103   11098.60        0.000349
 # L1FLnI_6p22.3e  9889    8056    8048.00 0.00895 9188    7999    8085    8088    8087.32 0.00895
 
-# It will go through each report TSV file and compile data for the counts into
-# a single count file for DESeq2. Missing entries will be given a 0 value.
-# It will output the count file as well as a DESeq2 script that is prepared
-# to run on that count file.
+# Example TEtranscripts count table format for an individual file:
+# [knestler@log004 raw_files]$ head CNMC_D_760_2-tetranscripts.cntTable
+# gene/TE CNMC_D_760_2Aligned.out.bam          ## it ultimately doesn't matter what the sample name is here because it will be replaced with the sample name of the respective file before the hyphen
+# "ENSG00000000003.12"    429
+# "ENSG00000000005.5"     0
+# "ENSG00000000419.10"    745
+# "ENSG00000000457.11"    691
+# "ENSG00000000460.14"    474
+# "ENSG00000000938.10"    0
+# "ENSG00000000971.13"    9
+# "ENSG00000001036.11"    495
+# "ENSG00000001084.8"     809
+
+# This script will go through each Telescope report TSV file and/or TEtranscripts count table
+# and compile data for the counts into a single count file for DESeq2. 
+# Missing entries will be given a 0 value. It will output the count file 
+# as well as a DESeq2 script that is prepared to run on that count file.
 
 # Get user arguments/usage
-parser = argparse.ArgumentParser(description="Create a count table to input into DESeq2 from Telescope report files as well as a DESeq2 script to process that data.")
+parser = argparse.ArgumentParser(description="Create a count table to input into DESeq2 from Telescope report files and TEtranscripts count tables. Make a DESeq2 script to process that data.")
 parser.add_argument("cntrl_files", type=str, help="File/list containing absolute file paths for control samples.")
 parser.add_argument("treat_files", type=str, help="File/list containing absolute file paths for treated or experimental samples.")
 parser.add_argument("annotation", type=str, help="Absolute file path to GTF file used by Telescope during the telescope align step.")
 parser.add_argument("out_dir", type=str, help="Directory for output count tables and DESeq secripts.")
-parser.add_argument("-o", "--out_name", default="telescope.count.table", type=str, help="Name for output files.")
+parser.add_argument("-o", "--out_name", type=str, default="combined.count.table", help="Name for output files.")
 parser.add_argument("-na", "--NA_value", type=str, default="zero", choices=['zero', 'exclude'], help="How to handle NA values -- set to zero or exclude.")
+parser.add_argument("-mode", type=str, default="combined", choices=['combined', 'telescope', 'tetranscripts'], help="Generate DESeq2 R script and count table for combined, telescope, or tetranscripts data.")
 args = parser.parse_args()
 
-# Add the data from the Telescpe report final_conf column to the growing data table
+# Add the data from the Telescope report final_conf column to the growing data table
 # ASSUMES GTF FILE FORMAT!!! Use file provided to Telescope during assign step.
 def make_annotation_table(annotation_file):
     # Initialize the data frame
@@ -57,25 +79,45 @@ def make_annotation_table(annotation_file):
             if locus_regex:
                 locus = locus_regex.group(1)
                 if locus not in locus_dict:
-                    locus_dict[locus] = "found" 
-                    new_row = pandas.DataFrame({'transcript': [locus]})
-                    annotation_frame = pandas.concat([annotation_frame, new_row], ignore_index=True) #previous line used append to add a new row to the data frame, but this is deprecated. Now, we use concat instead.
+                    locus_dict[locus] = "found"
+                    new_row = pandas.DataFrame({'transcript': [locus]}) # Previous line used append to add a new row to the data frame, but this is deprecated. Now, we use concat instead.
+                    annotation_frame = pandas.concat([annotation_frame, new_row], ignore_index=True)
             else:
                 # Some lines in Matthew's annotation file give the gene_id for ERVs: "### ERV316A3_1p36.33 ###" on a separate line
-                # I will skip these with the regex. However, you can put a warning here if you want intead of just continuing
+                # I will skip these with the regex. However, you can put a warning here if you want instead of just continuing
                 #print("Warning! This line lacks proper gene_id format:\n\t", line)
                 continue
     return annotation_frame
 
 # Take a new report file and add it to the count table using pandas merge
-def join_tables(report_filename, data_frame):
-    file_base_name = os.path.basename(report_filename)
-    report = pandas.read_csv(report_filename, sep='\t', skiprows=1)
+def join_telescope_tables(telescope_report_filename, data_frame):
+    file_base_name = os.path.basename(telescope_report_filename)
+    report = pandas.read_csv(telescope_report_filename, sep='\t', skiprows=1)
     slim_report = pandas.DataFrame(report, columns=['transcript', 'final_conf']) # If you want to have user specified column, replace this variable with passed input from args
     slim_report = pandas.DataFrame.rename(slim_report, columns={'final_conf' : file_base_name})
     data_frame = pandas.merge(data_frame, slim_report, on='transcript', how='left')
     return data_frame
 
+# Take a new tetranscripts report file and add it to the count table using pandas merge
+def join_tetranscripts_tables(tetranscripts_filename, data_frame):
+    file_base_name = os.path.basename(tetranscripts_filename)
+    report = pandas.read_csv(tetranscripts_filename, sep='\t', index_col=0)
+    report.columns.values[0] = file_base_name
+    data_frame = pandas.concat([data_frame, report], axis=1)
+    return data_frame
+
+# Merge the telescope and tetranscripts data frames
+def join_telescope_tetranscripts_dataframes(telescope_output_data_frame, tetranscripts_output_data_frame, data_frame):
+    tetranscripts_output_data_frame = tetranscripts_output_data_frame.reset_index()
+    for dataframe in [telescope_output_data_frame, tetranscripts_output_data_frame]:
+        dataframe.columns.values[0] = 'transcript'
+        dataframe.set_index('transcript', inplace=True)
+        dataframe.columns = dataframe.columns.str.split("-").str[0]
+        dataframe.reset_index(inplace=True)
+    data_frame = pandas.concat([tetranscripts_output_data_frame, telescope_output_data_frame], axis=0)
+    return data_frame
+
+# Generate the R script to run DESeq2 on the combined count tables
 def make_Rscript(count_out_path, cntrl_count, treat_count, DESeq2_out_path):
     script_text = \
         '''        library("DESeq2")
@@ -111,53 +153,172 @@ def make_Rscript(count_out_path, cntrl_count, treat_count, DESeq2_out_path):
 
 def main():
     # Prep the files and other variables
-    count_out_path = open( "".join([ args.out_dir, args.out_name, ".tsv" ]), "w")
-    script_out_path = open( "".join([ args.out_dir, args.out_name, ".DESeq2.Rscript.R" ]), "w")
+    count_out_path = open( "".join([ args.out_dir, args.out_name, ".tsv" ]), "w", newline='')
+    script_out_path = open( "".join([ args.out_dir, args.out_name, ".DESeq2.Rscript.R" ]), "w", newline='')
     DESeq2_out_path = "".join([ args.out_dir, args.out_name, ".DESeq2.tsv" ])
     cntrl_file_list = open(args.cntrl_files)
     treat_file_list = open(args.treat_files)
-    report_suffix = 'telescope_report.tsv'
-    cntrl_count = 0
-    treat_count = 0
+    telescope_report_suffix = 'telescope_report.tsv'
+    tetranscripts_report_suffix = 'tetranscripts.cntTable'
+    telescope_cntrl_count = 0
+    telescope_treat_count = 0
+    tetranscripts_cntrl_count = 0
+    tetranscripts_treat_count = 0
+    files_processed = False
 
-    # Caputre the annotations in a data frame. That I will pass as the base for adding additional data.
-    output_data_frame = make_annotation_table(args.annotation)
-    annotation_length = len(output_data_frame)
+    # If mode is the combined mode
+    if args.mode == "combined":
+        
+        # Capture the telescope annotations in a data frame. That I will pass as the base for adding additional data.
+        telescope_output_data_frame = make_annotation_table(args.annotation)
+        telescope_annotation_length = len(telescope_output_data_frame)
+        tetranscripts_output_data_frame = pandas.DataFrame()
 
-    # Process the data files into one table
-    for filename in cntrl_file_list:
-        filename = filename.rstrip()
-        if filename.endswith(report_suffix):
-            output_data_frame = join_tables(filename, output_data_frame)
-            cntrl_count += 1
-        else:
-            print("Warning:", filename, "lacks the Telescope report file tag: telescope_report.tsv. Skipping")
+        # Process the data files into one table
+        for filename in cntrl_file_list:
+            filename = filename.rstrip()
+            if filename.endswith(telescope_report_suffix):
+                telescope_output_data_frame = join_telescope_tables(filename, telescope_output_data_frame)
+                telescope_cntrl_count += 1
+                files_processed = True
+            elif filename.endswith(tetranscripts_report_suffix):
+                tetranscripts_output_data_frame = join_tetranscripts_tables(filename, tetranscripts_output_data_frame)
+                tetranscripts_cntrl_count += 1
+                files_processed = True
             continue
-    for filename in treat_file_list:
-        filename = filename.rstrip()
-        if filename.endswith(report_suffix):
-            output_data_frame = join_tables(filename, output_data_frame)
-            treat_count += 1
-        else:
-            print("Warning:", filename, "lacks the Telescope report file tag: telescope_report.tsv. Skipping")
+        for filename in treat_file_list:
+            filename = filename.rstrip()
+            if filename.endswith(telescope_report_suffix):
+                telescope_output_data_frame = join_telescope_tables(filename, telescope_output_data_frame)
+                telescope_treat_count += 1
+                files_processed = True
+            elif filename.endswith(tetranscripts_report_suffix):
+                tetranscripts_output_data_frame = join_tetranscripts_tables(filename, tetranscripts_output_data_frame)
+                tetranscripts_treat_count += 1
+                files_processed = True
             continue
 
-    # Make sure some files were processed and no entries were lost from the data frame
-    assert cntrl_count > 0
-    assert treat_count > 0
-    assert len(output_data_frame) == annotation_length
-    cntrl_file_list.close
-    treat_file_list.close
+        # Make sure some files were processed and no entries were lost from the data frame
+        assert telescope_cntrl_count > 0
+        assert telescope_treat_count > 0
+        assert tetranscripts_cntrl_count > 0
+        assert tetranscripts_treat_count > 0
+        assert len(telescope_output_data_frame) == telescope_annotation_length
+        assert files_processed == True
+        cntrl_count = int((telescope_cntrl_count + tetranscripts_cntrl_count)/2)
+        treat_count = int((telescope_treat_count + tetranscripts_treat_count)/2)
+        cntrl_file_list.close
+        treat_file_list.close
 
-    # Then write the output
-    output_data_frame = output_data_frame.rename(columns={'transcript' : ''}) # DESeq doesn't want a name on the first column, so remove it
-    if args.NA_value == "exclude":
-        output_data_frame = output_data_frame.dropna()
-    output_data_frame.to_csv(count_out_path, sep='\t', index=False, na_rep='0')
+        # Merge the telescope and tetranscripts data frames
+        combined_data_frame = pandas.DataFrame()
+        combined_data_frame = join_telescope_tetranscripts_dataframes(telescope_output_data_frame, tetranscripts_output_data_frame, combined_data_frame)
 
-    # Now make the R script and output it
-    script_output = make_Rscript(count_out_path, cntrl_count, treat_count, DESeq2_out_path)
-    script_out_path.write(script_output)
+        # Then write the output
+        combined_data_frame = combined_data_frame.rename(columns={'transcript' : ''}) # DESeq doesn't want a name on the first column, so remove it
+        if args.NA_value == "exclude":
+            combined_data_frame = combined_data_frame.dropna()
+        combined_data_frame.to_csv(count_out_path, sep='\t', index=False, na_rep=0)
+
+        # Now make the R script and output it
+        script_output = make_Rscript(count_out_path, cntrl_count, treat_count, DESeq2_out_path)
+        script_out_path.write(script_output)
+    
+    # If mode is the telescope mode
+    elif args.mode == "telescope":
+
+        # Capture the telescope annotations in a data frame. That I will pass as the base for adding additional data.
+        telescope_output_data_frame = make_annotation_table(args.annotation)
+        telescope_annotation_length = len(telescope_output_data_frame)
+
+        # Process the data files into one table
+        for filename in cntrl_file_list:
+            filename = filename.rstrip()
+            if filename.endswith(telescope_report_suffix):
+                telescope_output_data_frame = join_telescope_tables(filename, telescope_output_data_frame)
+                telescope_cntrl_count += 1
+                files_processed = True
+            continue
+        for filename in treat_file_list:
+            filename = filename.rstrip()
+            if filename.endswith(telescope_report_suffix):
+                telescope_output_data_frame = join_telescope_tables(filename, telescope_output_data_frame)
+                telescope_treat_count += 1
+                files_processed = True
+            continue
+
+        # Make sure some files were processed and no entries were lost from the data frame
+        assert telescope_cntrl_count > 0
+        assert telescope_treat_count > 0
+        assert len(telescope_output_data_frame) == telescope_annotation_length
+        assert files_processed == True
+        cntrl_count = telescope_cntrl_count
+        treat_count = telescope_treat_count
+        cntrl_file_list.close
+        treat_file_list.close
+
+        # Then write the output
+        telescope_output_data_frame = telescope_output_data_frame.rename(columns={'transcript' : ''}) # DESeq doesn't want a name on the first column, so remove it
+        telescope_output_data_frame.columns = telescope_output_data_frame.columns.str.split("-").str[0] # Remove the -telescope_report.tsv suffix from the column names
+        if args.NA_value == "exclude":
+            telescope_output_data_frame = telescope_output_data_frame.dropna()
+        telescope_output_data_frame.to_csv(count_out_path, sep='\t', index=False, na_rep=0)
+
+        # Now make the R script and output it
+        script_output = make_Rscript(count_out_path, cntrl_count, treat_count, DESeq2_out_path)
+        script_out_path.write(script_output)
+    
+    # If mode is the tetranscripts mode
+    elif args.mode == "tetranscripts":
+
+        # Capture the telescope annotations in a data frame. That I will pass as the base for adding additional data.
+        tetranscripts_output_data_frame = pandas.DataFrame()
+
+        # Process the data files into one table
+        for filename in cntrl_file_list:
+            filename = filename.rstrip()
+            if filename.endswith(tetranscripts_report_suffix):
+                tetranscripts_output_data_frame = join_tetranscripts_tables(filename, tetranscripts_output_data_frame)
+                tetranscripts_cntrl_count += 1
+                files_processed = True
+            continue
+        for filename in treat_file_list:
+            filename = filename.rstrip()
+            if filename.endswith(tetranscripts_report_suffix):
+                tetranscripts_output_data_frame = join_tetranscripts_tables(filename, tetranscripts_output_data_frame)
+                tetranscripts_treat_count += 1
+                files_processed = True
+            continue
+
+        # Make sure some files were processed and no entries were lost from the data frame
+        assert tetranscripts_cntrl_count > 0
+        assert tetranscripts_treat_count > 0
+        assert files_processed == True
+        cntrl_count = tetranscripts_cntrl_count
+        treat_count = tetranscripts_treat_count
+        cntrl_file_list.close
+        treat_file_list.close
+
+        # Then write the output
+        tetranscripts_output_data_frame.reset_index(inplace=True) # This is necessary to get the gene/TE column back
+        tetranscripts_output_data_frame.columns.values[0] = '' # DESeq doesn't want a name on the first column, so remove it
+        tetranscripts_output_data_frame.columns = tetranscripts_output_data_frame.columns.str.split("-").str[0] # Remove the -tetranscripts.cntTable suffix from the column names
+        if args.NA_value == "exclude":
+            tetranscripts_output_data_frame = tetranscripts_output_data_frame.dropna()
+        tetranscripts_output_data_frame.to_csv(count_out_path, sep='\t', index=False, na_rep=0)
+
+        # Now make the R script and output it
+        script_output = make_Rscript(count_out_path, cntrl_count, treat_count, DESeq2_out_path)
+        script_out_path.write(script_output)
+    
+    # If mode is not recognized
+    else:
+        print("Error! Mode not recognized. Please use combined, telescope, or tetranscripts.")
+        sys.exit()
+
+    # Close the files
+    count_out_path.close
+    script_out_path.close
 
 if __name__ == "__main__":
     main()
