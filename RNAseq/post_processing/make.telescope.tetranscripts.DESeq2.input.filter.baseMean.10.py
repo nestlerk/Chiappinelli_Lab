@@ -271,7 +271,7 @@ def main():
     # If mode is the tetranscripts mode
     elif args.mode == "tetranscripts":
 
-        # Capture the telescope annotations in a data frame. That I will pass as the base for adding additional data.
+        # Initialize the tetranscripts output dataframe.
         tetranscripts_output_data_frame = pandas.DataFrame()
 
         # Process the data files into one table
