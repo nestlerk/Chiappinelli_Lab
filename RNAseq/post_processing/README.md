@@ -1,6 +1,6 @@
 # Chiappinelli_Lab/RNAseq/post_processing
 
-## This folder will host scripts involved in the post-processing of RNA-seq data. Specifically, this refers to the steps following QC, alignment, and annotation.**
+## This folder will host scripts involved in the post-processing of RNA-seq data. Specifically, this refers to the steps following QC, alignment, and annotation.
 
 ### _make.telescope.tetranscripts.DESeq2.input.filter.baseMean.10.py_
 * This python script was originally created by James McDonald to generate a single combined count table and a DESeq2.R script from multiple telescope report files.
