@@ -61,7 +61,7 @@ parser.add_argument("out_dir", type=str, help="Directory for output count tables
 parser.add_argument("-a", "--annotation", type=str, help="Absolute file path to GTF file used by Telescope during the telescope align step.")
 parser.add_argument("-o", "--out_name", type=str, default="combined.count.table", help="Name for output files.")
 parser.add_argument("-na", "--NA_value", type=str, default="zero", choices=['zero', 'exclude'], help="How to handle NA values -- set to zero or exclude.")
-parser.add_argument("-mode", type=str, default="combined", choices=['combined', 'telescope', 'tetranscripts'], help="Generate DESeq2 R script and count table for combined, telescope, or tetranscripts data.")
+parser.add_argument("-mode", required=True, type=str, default="combined", choices=['combined', 'telescope', 'tetranscripts'], help="Generate DESeq2 R script and count table for combined, telescope, or tetranscripts data.")
 args = parser.parse_args()
 
 
@@ -69,7 +69,7 @@ def make_annotation_table(annotation_file):
     # Initialize the data frame
     annotation_frame = pandas.DataFrame(columns = ['transcript'])
     locus_dict = dict()
-    
+
     # Make a dictionary to find all unique locus IDs from the gene_id field of the annotation file
     # Print the unique ones to the data frame
     with open(annotation_file) as annotation_file:
