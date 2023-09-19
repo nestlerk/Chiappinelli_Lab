@@ -57,20 +57,19 @@ import textwrap # This lets me clear indentation from the script output I make
 parser = argparse.ArgumentParser(description="Create a count table to input into DESeq2 from Telescope report files and TEtranscripts count tables. Make a DESeq2 script to process that data.")
 parser.add_argument("cntrl_files", type=str, help="File/list containing absolute file paths for control samples.")
 parser.add_argument("treat_files", type=str, help="File/list containing absolute file paths for treated or experimental samples.")
-parser.add_argument("annotation", type=str, help="Absolute file path to GTF file used by Telescope during the telescope align step.")
 parser.add_argument("out_dir", type=str, help="Directory for output count tables and DESeq secripts.")
+parser.add_argument("-a", "--annotation", type=str, help="Absolute file path to GTF file used by Telescope during the telescope align step.")
 parser.add_argument("-o", "--out_name", type=str, default="combined.count.table", help="Name for output files.")
 parser.add_argument("-na", "--NA_value", type=str, default="zero", choices=['zero', 'exclude'], help="How to handle NA values -- set to zero or exclude.")
 parser.add_argument("-mode", type=str, default="combined", choices=['combined', 'telescope', 'tetranscripts'], help="Generate DESeq2 R script and count table for combined, telescope, or tetranscripts data.")
 args = parser.parse_args()
 
-# Add the data from the Telescope report final_conf column to the growing data table
-# ASSUMES GTF FILE FORMAT!!! Use file provided to Telescope during assign step.
+
 def make_annotation_table(annotation_file):
     # Initialize the data frame
     annotation_frame = pandas.DataFrame(columns = ['transcript'])
     locus_dict = dict()
-
+    
     # Make a dictionary to find all unique locus IDs from the gene_id field of the annotation file
     # Print the unique ones to the data frame
     with open(annotation_file) as annotation_file:
@@ -168,7 +167,7 @@ def main():
 
     # If mode is the combined mode
     if args.mode == "combined":
-        
+
         # Capture the telescope annotations in a data frame. That I will pass as the base for adding additional data.
         telescope_output_data_frame = make_annotation_table(args.annotation)
         telescope_annotation_length = len(telescope_output_data_frame)
