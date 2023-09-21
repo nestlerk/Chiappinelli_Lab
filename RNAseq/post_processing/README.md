@@ -8,8 +8,8 @@
 * This script will take in 2 files/lists that specify sample file unique IDs:
   - Control Samples (.txt file containing full path to each telescope report file and/or tetranscripts count table).
   - Treatment/Experimental Samples (.txt file containing full path to each telescope report file and/or tetranscripts count table).
-  - Annotation file Path -- Assumes GTF!!! This is the annotation file for the Telescope reports only.
   - Output directory
+  - Optional input for the path to the Telescope annotation file (assumes GTF). This is required when running combined or telescope mode.
   - Optional input will be a flag for output file names.
   - Optinal input will be a flag for handling NA values: zero or exclude. Default is zero.
   - Optional input will be a flag for mode: combined, telescope, or tetranscripts. Default is combined.
