@@ -119,33 +119,88 @@ def join_telescope_tetranscripts_dataframes(telescope_output_data_frame, tetrans
 # Generate the R script to run DESeq2 on the combined count tables
 def make_Rscript(count_out_path, cntrl_count, treat_count, DESeq2_out_path):
     script_text = \
-        '''        library("DESeq2")
-        # Load in the data
-        countdata <- read.table("{count_file}", header=TRUE)
-        #Then create a data frame matching the sample names and treatments so that the model can be made
-        names <- colnames(countdata)
-        treatment <- c(rep("control", {cntrl_count}), rep("experimental", {treat_count}))
-        coldata <- data.frame(treatment, row.names=names)
-        # Pre-filtering
-	countdata <- countdata[rowSums(countdata) >=10,]
-        # Make the DESeq object
-        cntTable <- DESeqDataSetFromMatrix(countData = countdata, colData = coldata, design = ~ treatment)
-        deseq <- DESeq(cntTable)
-        # Unless you have replicates, expect a warning that the samples were counted as replicates for purposes
-        # of determining dispersion, making the differential expression suspect and good only for exploratory purposes.
-        results <- results(deseq)
-        # Just to have a record in the ERR/OUT FILES, check that you have the samples labeled as treatment_<treatment name>_vs_<control treatment name>
-        resultsNames(deseq)
-        # Make sure this is correct with the relevel command anyway.
-        cntTable$treatment <- relevel(cntTable$treatment, "control")
-        # Double check the right output
-        resultsNames(deseq)
-        deseq <- DESeq(cntTable)
-        # Then make the final data for a specific comparison.
-        # The first line of the results object from the sample should read: log2 fold change (MLE): treatment ITF vs Mock
-        results <- results(deseq, contrast = c("treatment", "experimental", "control") )
-        head(results)
-        write.table(as.data.frame(results), file="{DESeq2_out_path}", sep="\\t", col.names=FALSE)
+'''library("DESeq2")
+library("dplyr")
+# Load in the data
+countdata <- read.table("{count_file}", header=TRUE)
+#Then create a data frame matching the sample names and treatments so that the model can be made
+names <- colnames(countdata)
+treatment <- c(rep("control", {cntrl_count}), rep("experimental", {treat_count}))
+coldata <- data.frame(treatment, row.names=names)
+# Pre-filtering
+countdata <- countdata[rowSums(countdata) >=10,]
+# Make the DESeq object
+cntTable <- DESeqDataSetFromMatrix(countData = countdata, colData = coldata, design = ~ treatment)
+deseq <- DESeq(cntTable)
+# Unless you have replicates, expect a warning that the samples were counted as replicates for purposes
+# of determining dispersion, making the differential expression suspect and good only for exploratory purposes.
+results <- results(deseq)
+# Just to have a record in the ERR/OUT FILES, check that you have the samples labeled as treatment_<treatment name>_vs_<control treatment name>
+resultsNames(deseq)
+# Make sure this is correct with the relevel command anyway.
+cntTable$treatment <- relevel(cntTable$treatment, "control")
+# Double check the right output
+resultsNames(deseq)
+deseq <- DESeq(cntTable)
+# Then make the final data for a specific comparison.
+results <- results(deseq, contrast = c("treatment", "experimental", "control") )
+# Make the results a dataframe
+results <- as.data.frame(results)
+# Make the row.names a column so that it can be joined to the telescope dictionary
+results <- cbind(row.names(results), results)
+# Name the columns
+colnames(results) <- c("name", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+head(results)
+write.table(as.data.frame(results), file="{DESeq2_out_path}", sep="\\t", col.names=TRUE, row.names=FALSE, quote=FALSE)
+        '''.format(count_file = count_out_path.name, cntrl_count = cntrl_count, treat_count = treat_count, DESeq2_out_path = DESeq2_out_path)
+    script_dedent = textwrap.dedent(script_text)
+    return script_dedent
+
+# Generate the R script to run DESeq2 on the combined count tables
+def make_Rscript_combined(count_out_path, cntrl_count, treat_count, DESeq2_out_path):
+    script_text = \
+'''library("DESeq2")
+library("dplyr")
+# Load in the data
+countdata <- read.table("{count_file}", header=TRUE)
+# Create a dataframe to map the gene names with the telescope annotations
+gene_type <- as.data.frame(cbind(row.names(countdata), countdata$type))
+colnames(gene_type) <- c("name", "type")
+telescope_df <- gene_type[gene_type$type == "telescope",]
+telescope_list <- as.list(telescope_df$name)
+countdata <- countdata[,!names(countdata) %in% c("type")]
+# Then create a data frame matching the sample names and treatments so that the model can be made
+names <- colnames(countdata)
+treatment <- c(rep("control", 2), rep("experimental", 6))
+coldata <- data.frame(treatment, row.names=names)
+# Pre-filtering
+countdata <- countdata[rowSums(countdata) >=10,]     
+# Make the DESeq object
+cntTable <- DESeqDataSetFromMatrix(countData = countdata, colData = coldata, design = ~ treatment)
+deseq <- DESeq(cntTable)
+# Unless you have replicates, expect a warning that the samples were counted as replicates for purposes
+# of determining dispersion, making the differential expression suspect and good only for exploratory purposes.
+results <- results(deseq)
+# Just to have a record in the ERR/OUT FILES, check that you have the samples labeled as treatment_<treatment name>_vs_<control treatment name>
+resultsNames(deseq)
+# Make sure this is correct with the relevel command anyway.
+cntTable$treatment <- relevel(cntTable$treatment, "control")
+# Double check the right output
+resultsNames(deseq)
+deseq <- DESeq(cntTable)
+# Then make the final data for a specific comparison.
+results <- results(deseq, contrast = c("treatment", "experimental", "control") )
+# Make the results a dataframe
+results <- as.data.frame(results)
+# Make the row.names a column so that it can be joined to the telescope dictionary
+results <- cbind(row.names(results), results)
+# Name the columns
+colnames(results) <- c("name", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+# Filter the results to only include the telescope transcripts
+filtered_results <- results[results$name %in% telescope_list,]
+# Check the head of the filtered results
+head(filtered_results)
+write.table(as.data.frame(filtered_results), file="{DESeq2_out_path}", sep="\\t", col.names=TRUE, row.names=FALSE, quote=FALSE)
         '''.format(count_file = count_out_path.name, cntrl_count = cntrl_count, treat_count = treat_count, DESeq2_out_path = DESeq2_out_path)
     script_dedent = textwrap.dedent(script_text)
     return script_dedent
@@ -209,8 +264,12 @@ def main():
         cntrl_file_list.close
         treat_file_list.close
 
-        # Merge the telescope and tetranscripts data frames
+        # Add a column to each data frame to indicate the gene type
+        telescope_output_data_frame['type'] = 'telescope'
+        tetranscripts_output_data_frame['type'] = 'tetranscripts'
+        # Initialize the combined data frame
         combined_data_frame = pandas.DataFrame()
+        # Combine the dataframes
         combined_data_frame = join_telescope_tetranscripts_dataframes(telescope_output_data_frame, tetranscripts_output_data_frame, combined_data_frame)
 
         # Then write the output
@@ -220,7 +279,7 @@ def main():
         combined_data_frame.to_csv(count_out_path, sep='\t', index=False, na_rep=0)
 
         # Now make the R script and output it
-        script_output = make_Rscript(count_out_path, cntrl_count, treat_count, DESeq2_out_path)
+        script_output = make_Rscript_combined(count_out_path, cntrl_count, treat_count, DESeq2_out_path)
         script_out_path.write(script_output)
     
     # If mode is the telescope mode
