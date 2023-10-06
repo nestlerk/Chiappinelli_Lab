@@ -12,7 +12,7 @@ import textwrap # This lets me clear indentation from the script output I make
 # 3. Annotation file Path -- Assumes GTF!!! This is the annotation file for the Telescope reports only.
 # 4. Output directory
 # 5. Optional input will be a tag for output file names and a flag for handling NA values.
-# 6. Optional input will be a flag for mode: combined, telescope, or tetranscripts. Default is combined.
+# 6. Required input will be a flag for mode: tetranscripts or telescope.
 
 # The input files should provide the absolute file path for each Telescope report file and TEtranscripts count table.
 # The path for each Telescope report file should end in "-telescope_report.tsv".
@@ -21,9 +21,8 @@ import textwrap # This lets me clear indentation from the script output I make
 # This is what the script will use to match the samples.
 
 # The mode flag gives you the option to generate a single count table and DESeq2 script for:
-# 1. Combined data -- This will combine the Telescope and TEtranscripts data into a single count table and DESeq2 script.
-# 2. Telescope data only -- This will only use the Telescope data to generate a count table and DESeq2 script.
-# 3. TEtranscripts data only -- This will only use the TEtranscripts data to generate a count table and DESeq2 script.
+# 1. TEtranscripts data only -- This will only use the TEtranscripts data to generate a count table and DESeq2 script.  
+# 2. Telescope data only -- This will use the canonical gene IDs from the TEtranscripts data and the Telescope data to generate a count table and DESeq2 script.
 
 # Example Telescope report format for an individual file:
 # [jimcdonald@mgpc telescope.troubleshoot]$ head TCGA-04-1331-01A.bt2.tele.troubleshoot-telescope_report.tsv
@@ -61,9 +60,8 @@ parser.add_argument("out_dir", type=str, help="Directory for output count tables
 parser.add_argument("-a", "--annotation", type=str, help="Absolute file path to GTF file used by Telescope during the telescope align step.")
 parser.add_argument("-o", "--out_name", type=str, default="combined.count.table", help="Name for output files.")
 parser.add_argument("-na", "--NA_value", type=str, default="zero", choices=['zero', 'exclude'], help="How to handle NA values -- set to zero or exclude.")
-parser.add_argument("-mode", required=True, type=str, default="combined", choices=['combined', 'telescope', 'tetranscripts'], help="Generate DESeq2 R script and count table for combined, telescope, or tetranscripts data.")
+parser.add_argument("-mode", required=True, type=str, choices=['tetranscripts', 'telescope'], help="Generate DESeq2 R script and count table from tetranscripts and telescope data.")
 args = parser.parse_args()
-
 
 def make_annotation_table(annotation_file):
     # Initialize the data frame
@@ -107,11 +105,16 @@ def join_tetranscripts_tables(tetranscripts_filename, data_frame):
 
 # Merge the telescope and tetranscripts data frames
 def join_telescope_tetranscripts_dataframes(telescope_output_data_frame, tetranscripts_output_data_frame, data_frame):
+    # reset the index of the tetranscripts data frame
     tetranscripts_output_data_frame = tetranscripts_output_data_frame.reset_index()
+    # make sure the genes are strings in the tetranscripts output data frame
+    tetranscripts_output_data_frame.iloc[:,0] = tetranscripts_output_data_frame.iloc[:,0].astype(str)
+    # keep only the ENSG IDs from the tetranscripts output data frame
+    tetranscripts_output_data_frame = tetranscripts_output_data_frame[tetranscripts_output_data_frame.iloc[:,0].str.contains("ENSG")]
     for dataframe in [telescope_output_data_frame, tetranscripts_output_data_frame]:
         dataframe.columns.values[0] = 'transcript'
         dataframe.set_index('transcript', inplace=True)
-        dataframe.columns = dataframe.columns.str.split("-").str[0]
+        dataframe.columns = dataframe.columns.str.rsplit("-", n=1).str[0]
         dataframe.reset_index(inplace=True)
     data_frame = pandas.concat([tetranscripts_output_data_frame, telescope_output_data_frame], axis=0)
     return data_frame
@@ -120,7 +123,6 @@ def join_telescope_tetranscripts_dataframes(telescope_output_data_frame, tetrans
 def make_Rscript(count_out_path, cntrl_count, treat_count, DESeq2_out_path):
     script_text = \
 '''library("DESeq2")
-library("dplyr")
 # Load in the data
 countdata <- read.table("{count_file}", header=TRUE)
 #Then create a data frame matching the sample names and treatments so that the model can be made
@@ -144,63 +146,16 @@ resultsNames(deseq)
 deseq <- DESeq(cntTable)
 # Then make the final data for a specific comparison.
 results <- results(deseq, contrast = c("treatment", "experimental", "control") )
-# Make the results a dataframe
+# make the results a data frame
 results <- as.data.frame(results)
-# Make the row.names a column so that it can be joined to the telescope dictionary
-results <- cbind(row.names(results), results)
-# Name the columns
-colnames(results) <- c("name", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
+# Add the gene names back in
+results <- results %>% mutate(name = rownames(results))
+# reorder the results columns so that the name column is first
+results <- results[,c(7,1,2,3,4,5,6)]
+# Take a look at the results
 head(results)
+# Write the results to a tsv file
 write.table(as.data.frame(results), file="{DESeq2_out_path}", sep="\\t", col.names=TRUE, row.names=FALSE, quote=FALSE)
-        '''.format(count_file = count_out_path.name, cntrl_count = cntrl_count, treat_count = treat_count, DESeq2_out_path = DESeq2_out_path)
-    script_dedent = textwrap.dedent(script_text)
-    return script_dedent
-
-# Generate the R script to run DESeq2 on the combined count tables
-def make_Rscript_combined(count_out_path, cntrl_count, treat_count, DESeq2_out_path):
-    script_text = \
-'''library("DESeq2")
-library("dplyr")
-# Load in the data
-countdata <- read.table("{count_file}", header=TRUE)
-# Create a dataframe to map the gene names with the telescope annotations
-gene_type <- as.data.frame(cbind(row.names(countdata), countdata$type))
-colnames(gene_type) <- c("name", "type")
-telescope_df <- gene_type[gene_type$type == "telescope",]
-telescope_list <- as.list(telescope_df$name)
-countdata <- countdata[,!names(countdata) %in% c("type")]
-# Then create a data frame matching the sample names and treatments so that the model can be made
-names <- colnames(countdata)
-treatment <- c(rep("control", 2), rep("experimental", 6))
-coldata <- data.frame(treatment, row.names=names)
-# Pre-filtering
-countdata <- countdata[rowSums(countdata) >=10,]     
-# Make the DESeq object
-cntTable <- DESeqDataSetFromMatrix(countData = countdata, colData = coldata, design = ~ treatment)
-deseq <- DESeq(cntTable)
-# Unless you have replicates, expect a warning that the samples were counted as replicates for purposes
-# of determining dispersion, making the differential expression suspect and good only for exploratory purposes.
-results <- results(deseq)
-# Just to have a record in the ERR/OUT FILES, check that you have the samples labeled as treatment_<treatment name>_vs_<control treatment name>
-resultsNames(deseq)
-# Make sure this is correct with the relevel command anyway.
-cntTable$treatment <- relevel(cntTable$treatment, "control")
-# Double check the right output
-resultsNames(deseq)
-deseq <- DESeq(cntTable)
-# Then make the final data for a specific comparison.
-results <- results(deseq, contrast = c("treatment", "experimental", "control") )
-# Make the results a dataframe
-results <- as.data.frame(results)
-# Make the row.names a column so that it can be joined to the telescope dictionary
-results <- cbind(row.names(results), results)
-# Name the columns
-colnames(results) <- c("name", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj")
-# Filter the results to only include the telescope transcripts
-filtered_results <- results[results$name %in% telescope_list,]
-# Check the head of the filtered results
-head(filtered_results)
-write.table(as.data.frame(filtered_results), file="{DESeq2_out_path}", sep="\\t", col.names=TRUE, row.names=FALSE, quote=FALSE)
         '''.format(count_file = count_out_path.name, cntrl_count = cntrl_count, treat_count = treat_count, DESeq2_out_path = DESeq2_out_path)
     script_dedent = textwrap.dedent(script_text)
     return script_dedent
@@ -221,7 +176,7 @@ def main():
     files_processed = False
 
     # If mode is the combined mode
-    if args.mode == "combined":
+    if args.mode == "telescope":
 
         # Capture the telescope annotations in a data frame. That I will pass as the base for adding additional data.
         telescope_output_data_frame = make_annotation_table(args.annotation)
@@ -264,14 +219,10 @@ def main():
         cntrl_file_list.close
         treat_file_list.close
 
-        # Add a column to each data frame to indicate the gene type
-        telescope_output_data_frame['type'] = 'telescope'
-        tetranscripts_output_data_frame['type'] = 'tetranscripts'
         # Initialize the combined data frame
         combined_data_frame = pandas.DataFrame()
         # Combine the dataframes
         combined_data_frame = join_telescope_tetranscripts_dataframes(telescope_output_data_frame, tetranscripts_output_data_frame, combined_data_frame)
-
         # Then write the output
         combined_data_frame = combined_data_frame.rename(columns={'transcript' : ''}) # DESeq doesn't want a name on the first column, so remove it
         if args.NA_value == "exclude":
@@ -279,53 +230,9 @@ def main():
         combined_data_frame.to_csv(count_out_path, sep='\t', index=False, na_rep=0)
 
         # Now make the R script and output it
-        script_output = make_Rscript_combined(count_out_path, cntrl_count, treat_count, DESeq2_out_path)
-        script_out_path.write(script_output)
-    
-    # If mode is the telescope mode
-    elif args.mode == "telescope":
-
-        # Capture the telescope annotations in a data frame. That I will pass as the base for adding additional data.
-        telescope_output_data_frame = make_annotation_table(args.annotation)
-        telescope_annotation_length = len(telescope_output_data_frame)
-
-        # Process the data files into one table
-        for filename in cntrl_file_list:
-            filename = filename.rstrip()
-            if filename.endswith(telescope_report_suffix):
-                telescope_output_data_frame = join_telescope_tables(filename, telescope_output_data_frame)
-                telescope_cntrl_count += 1
-                files_processed = True
-            continue
-        for filename in treat_file_list:
-            filename = filename.rstrip()
-            if filename.endswith(telescope_report_suffix):
-                telescope_output_data_frame = join_telescope_tables(filename, telescope_output_data_frame)
-                telescope_treat_count += 1
-                files_processed = True
-            continue
-
-        # Make sure some files were processed and no entries were lost from the data frame
-        assert telescope_cntrl_count > 0
-        assert telescope_treat_count > 0
-        assert len(telescope_output_data_frame) == telescope_annotation_length
-        assert files_processed == True
-        cntrl_count = telescope_cntrl_count
-        treat_count = telescope_treat_count
-        cntrl_file_list.close
-        treat_file_list.close
-
-        # Then write the output
-        telescope_output_data_frame = telescope_output_data_frame.rename(columns={'transcript' : ''}) # DESeq doesn't want a name on the first column, so remove it
-        telescope_output_data_frame.columns = telescope_output_data_frame.columns.str.split("-").str[0] # Remove the -telescope_report.tsv suffix from the column names
-        if args.NA_value == "exclude":
-            telescope_output_data_frame = telescope_output_data_frame.dropna()
-        telescope_output_data_frame.to_csv(count_out_path, sep='\t', index=False, na_rep=0)
-
-        # Now make the R script and output it
         script_output = make_Rscript(count_out_path, cntrl_count, treat_count, DESeq2_out_path)
         script_out_path.write(script_output)
-    
+
     # If mode is the tetranscripts mode
     elif args.mode == "tetranscripts":
 
@@ -360,7 +267,7 @@ def main():
         # Then write the output
         tetranscripts_output_data_frame.reset_index(inplace=True) # This is necessary to get the gene/TE column back
         tetranscripts_output_data_frame.columns.values[0] = '' # DESeq doesn't want a name on the first column, so remove it
-        tetranscripts_output_data_frame.columns = tetranscripts_output_data_frame.columns.str.split("-").str[0] # Remove the -tetranscripts.cntTable suffix from the column names
+        tetranscripts_output_data_frame.columns = tetranscripts_output_data_frame.columns.str.rsplit("-", n=1).str[0]
         if args.NA_value == "exclude":
             tetranscripts_output_data_frame = tetranscripts_output_data_frame.dropna()
         tetranscripts_output_data_frame.to_csv(count_out_path, sep='\t', index=False, na_rep=0)
