@@ -278,7 +278,7 @@ def main():
     
     # If mode is not recognized
     else:
-        print("Error! Mode not recognized. Please use combined, telescope, or tetranscripts.")
+        print("Error! Mode not recognized. Please use tetranscripts or telescope.")
         sys.exit()
 
     # Close the files
